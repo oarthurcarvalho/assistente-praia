@@ -1,0 +1,26 @@
+name: diagnostico
+
+# Manual: Actions > diagnostico > Run workflow. Mostra, no Step Summary, como cada
+# fonte responde ao runner (IP dos EUA) para comparar com a mesma tabela rodada no PC.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostico:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - run: python -m coletor.diagnostico
