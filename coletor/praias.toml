@@ -1,0 +1,66 @@
+# As 8 praias do projeto. Uma praia nova é só uma tabela nova aqui, sem mudar código.
+#
+# lat, lon      ponto no mar, ~1 km da areia: é ele que escolhe a célula do modelo de onda.
+#               8 praias caem em 5 células de ~9 km (medido em 19/11/2026):
+#               Arpoador, Ipanema e Leblon são a mesma; Prainha e Grumari também.
+# orientacao    para onde a praia "olha", em graus a partir do norte (sul = 180).
+#               Normal à linha de costa do OpenStreetMap perto do ponto do INEA,
+#               arredondada a 5 graus. Arpoador e Grumari: conferir no mapa.
+# inea          código do ponto de coleta no SEIRHI (no boletim em PDF é a sigla final,
+#               ex.: 02RJ01CP0005 = CP05).
+
+[copacabana]
+nome = "Copacabana"
+lat = -23.010
+lon = -43.160
+orientacao = 135
+inea = "02RJ01CP0005" # em frente à Rua Santa Clara
+
+[arpoador]
+nome = "Arpoador"
+lat = -22.995
+lon = -43.192
+orientacao = 180
+inea = "02RJ01AR0000" # canto esquerdo da praia
+
+[ipanema]
+nome = "Ipanema"
+lat = -22.995
+lon = -43.205
+orientacao = 185
+inea = "02RJ01IP0006" # em frente à Rua Joana Angélica
+
+[leblon]
+nome = "Leblon"
+lat = -22.995
+lon = -43.223
+orientacao = 165
+inea = "02RJ01LB0001" # em frente à Rua Bartolomeu Mitre
+
+[barra_posto5]
+nome = "Barra da Tijuca (Posto 5)"
+lat = -23.020
+lon = -43.320
+orientacao = 185
+inea = "02RJ01BD0005" # em frente à Avenida Ayrton Senna
+
+[recreio]
+nome = "Recreio"
+lat = -23.035
+lon = -43.465
+orientacao = 155
+inea = "02RJ01BD0000" # em frente à Rua Manuel Jorge Lydia
+
+[prainha]
+nome = "Prainha"
+lat = -23.048
+lon = -43.506
+orientacao = 135
+inea = "02RJ01PN0000" # centro da praia
+
+[grumari]
+nome = "Grumari"
+lat = -23.055
+lon = -43.524
+orientacao = 175
+inea = "02RJ01GM0001" # centro da praia
