@@ -25,3 +25,17 @@ def salvar_local(chave: str, conteudo: bytes, raiz: Path = RAIZ_LOCAL) -> Path:
     caminho.parent.mkdir(parents=True, exist_ok=True)
     caminho.write_bytes(conteudo)
     return caminho
+
+
+# Estado entre execuções (ex.: estado/hashes.json). O runner apaga o disco no fim,
+# então na sex 27 ele passa a morar no R2; aqui a interface já é a mesma.
+def ler_estado(chave: str, raiz: Path = RAIZ_LOCAL) -> dict:
+    caminho = raiz / chave
+    if not caminho.exists():
+        return {}
+    return json.loads(caminho.read_text(encoding="utf-8"))
+
+
+def salvar_estado(chave: str, dados: dict, raiz: Path = RAIZ_LOCAL) -> Path:
+    texto = json.dumps(dados, ensure_ascii=False, indent=2, sort_keys=True)
+    return salvar_local(chave, texto.encode("utf-8"), raiz)
