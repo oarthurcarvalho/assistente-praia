@@ -1,0 +1,50 @@
+name: coleta
+
+# A cada 3 h, no minuto 23 (UTC): 00:23, 03:23, ..., 21:23. No Rio são 3 h a menos.
+# Minuto quebrado porque na hora cheia todo mundo agenda e o GitHub atrasa ou descarta.
+# O próprio coletor.rodar decide o que entra em cada horário (CHM 09h/21h, diárias 09h).
+on:
+  schedule:
+    - cron: "23 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      todas:
+        description: "Coletar todas as fontes, ignorando o horário"
+        type: boolean
+        default: true
+
+# Só lê o código: a coleta grava no R2, nunca no repositório.
+permissions:
+  contents: read
+
+# Uma coleta por vez: duas execuções juntas disputariam o estado/hashes.json.
+# A nova espera a anterior terminar em vez de cancelá-la no meio de uma gravação.
+concurrency:
+  group: coleta
+  cancel-in-progress: false
+
+jobs:
+  coleta:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10 # uma execução completa leva ~15 s; 10 min só se algo travar
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      # As chaves entram só neste passo. Nunca dar echo nelas: o GitHub mascara o valor
+      # exato do Secret, mas não um pedaço dele nem uma versão transformada.
+      - name: coletar
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          TODAS: ${{ inputs.todas && '--todas' || '' }}
+        run: python -m coletor.rodar $TODAS

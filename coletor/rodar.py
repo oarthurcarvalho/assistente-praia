@@ -9,6 +9,7 @@ A cada 3 h: Open-Meteo (4) e boletins da OMM. Às 09h e 21h UTC: página do CHM.
 """
 
 import argparse
+import os
 import sys
 import time
 from datetime import UTC, datetime
@@ -129,6 +130,16 @@ def codigo_de_saida(resultados: list[dict]) -> int:
     return 1 if any(r["status"] == "falha" for r in resultados) else 0
 
 
+def tabela_markdown(resultados: list[dict], chave_log: str) -> str:
+    """Resumo para o Step Summary do Actions: dá para ver a execução sem abrir o log."""
+    linhas = ["| fonte | status | KB | ms | detalhe |", "|---|---|--:|--:|---|"]
+    for r in resultados:
+        detalhe = r.get("erro") or r.get("chave") or ""
+        kb = f"{r.get('bytes', 0) / 1024:.1f}"
+        linhas.append(f"| {r['fonte']} | {r['status']} | {kb} | {r.get('ms', 0)} | `{detalhe}` |")
+    return "\n".join(linhas) + f"\n\nlog: `{chave_log}`\n"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m coletor.rodar")
     parser.add_argument("--todas", action="store_true", help="coleta tudo, ignora o horário")
@@ -145,6 +156,11 @@ def main(argv: list[str] | None = None) -> int:
         tamanho = f"{r.get('bytes', 0):>9} B {r.get('ms', 0):>6} ms"
         print(f"{r['fonte']:20} {r['status']:12} {tamanho}  {detalhe}")
     print(f"log: {chave_log}")
+
+    resumo = os.environ.get("GITHUB_STEP_SUMMARY")  # só existe dentro do Actions
+    if resumo:
+        with open(resumo, "a", encoding="utf-8") as arquivo:
+            arquivo.write(tabela_markdown(resultados, chave_log))
     return codigo_de_saida(resultados)
 
 

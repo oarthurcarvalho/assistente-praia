@@ -159,3 +159,14 @@ def test_observacoes_pedem_janela_de_26_horas():
     assert pedidos[1].params["timestart"] == f"{AGORA - JANELA:%Y-%m-%dT%H:%M}"
     assert boia["fonte"] == "boia_rj4" and ioc["fonte"] == "ioc_niteroi"
     assert boia["resposta"] == []  # resposta inteira, mesmo vazia: o parse da semana 3 decide
+
+
+def test_tabela_do_step_summary_mostra_a_falha():
+    resultados = [
+        {"fonte": "openmeteo_mar", "status": "ok", "bytes": 2048, "ms": 900, "chave": "raw/x"},
+        {"fonte": "boia_rj4", "status": "falha", "erro": "HTTPStatusError('404')", "ms": 80},
+    ]
+    tabela = rodar.tabela_markdown(resultados, "execucoes/dt=2026-11-28/092305.json")
+    assert "| openmeteo_mar | ok | 2.0 | 900 | `raw/x` |" in tabela
+    assert "| boia_rj4 | falha | 0.0 | 80 | `HTTPStatusError('404')` |" in tabela
+    assert tabela.rstrip().endswith("`execucoes/dt=2026-11-28/092305.json`")
