@@ -1,12 +1,19 @@
-"""Onde o bruto mora. Por enquanto em disco; o R2 entra na sex 27 com a mesma chave.
+"""Onde o bruto mora: no R2 (produção) ou em disco (testes e ensaio local), mesma chave.
 
-Layout (seção 6.2 do plano):  raw/<fonte>/dt=AAAA-MM-DD/HHMMSS.<extensao>
+Layout (seção 6.2 do plano):
+    raw/<fonte>/dt=AAAA-MM-DD/HHMMSS.<extensao>    bruto imutável, sempre .gz
+    execucoes/dt=AAAA-MM-DD/HHMMSS.json             1 log por execução
+    estado/hashes.json                              último hash de cada página
 """
 
 import gzip
 import json
+import os
 from datetime import datetime
 from pathlib import Path
+
+import boto3
+from botocore.exceptions import ClientError
 
 RAIZ_LOCAL = Path("dados")
 
@@ -20,22 +27,61 @@ def json_gz(dados: dict) -> bytes:
     return gzip.compress(json.dumps(dados, ensure_ascii=False).encode("utf-8"))
 
 
-def salvar_local(chave: str, conteudo: bytes, raiz: Path = RAIZ_LOCAL) -> Path:
-    caminho = raiz / chave
-    caminho.parent.mkdir(parents=True, exist_ok=True)
-    caminho.write_bytes(conteudo)
-    return caminho
+class Local:
+    """Pasta no disco (dados/, fora do git). O runner apaga tudo no fim: só para ensaio."""
+
+    def __init__(self, raiz: Path = RAIZ_LOCAL):
+        self.raiz = Path(raiz)
+
+    def salvar(self, chave: str, conteudo: bytes) -> None:
+        caminho = self.raiz / chave
+        caminho.parent.mkdir(parents=True, exist_ok=True)
+        caminho.write_bytes(conteudo)
+
+    def ler(self, chave: str) -> bytes | None:
+        caminho = self.raiz / chave
+        return caminho.read_bytes() if caminho.exists() else None
 
 
-# Estado entre execuções (ex.: estado/hashes.json). O runner apaga o disco no fim,
-# então na sex 27 ele passa a morar no R2; aqui a interface já é a mesma.
-def ler_estado(chave: str, raiz: Path = RAIZ_LOCAL) -> dict:
-    caminho = raiz / chave
-    if not caminho.exists():
-        return {}
-    return json.loads(caminho.read_text(encoding="utf-8"))
+class R2:
+    """Bucket no Cloudflare R2, pela API do S3. O token só enxerga o praia-raw."""
+
+    def __init__(self, cliente, bucket: str):
+        self.cliente = cliente
+        self.bucket = bucket
+
+    def salvar(self, chave: str, conteudo: bytes) -> None:
+        self.cliente.put_object(Bucket=self.bucket, Key=chave, Body=conteudo)
+
+    def ler(self, chave: str) -> bytes | None:
+        try:
+            objeto = self.cliente.get_object(Bucket=self.bucket, Key=chave)
+        except ClientError as erro:
+            if erro.response["Error"]["Code"] in ("404", "NoSuchKey"):
+                return None  # 1ª execução: ainda não há estado
+            raise  # sem permissão, bucket errado...: isso é falha, não "vazio"
+        return objeto["Body"].read()
 
 
-def salvar_estado(chave: str, dados: dict, raiz: Path = RAIZ_LOCAL) -> Path:
+def r2_do_ambiente() -> R2:
+    """Chaves vindas do ambiente: Secrets/Variables no Actions, .env no PC."""
+    cliente = boto3.client(
+        "s3",
+        endpoint_url=os.environ["R2_ENDPOINT"],
+        aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
+        aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+        region_name="auto",  # o R2 não tem região; o boto3 exige uma
+    )
+    return R2(cliente, os.environ["R2_BUCKET"])
+
+
+# Estado entre execuções. Lido no começo e gravado no fim de cada execução; o
+# concurrency do workflow garante que duas execuções não disputem o mesmo arquivo.
+def ler_estado(armazem, chave: str) -> dict:
+    conteudo = armazem.ler(chave)
+    return json.loads(conteudo) if conteudo is not None else {}
+
+
+def salvar_estado(armazem, chave: str, dados: dict) -> None:
     texto = json.dumps(dados, ensure_ascii=False, indent=2, sort_keys=True)
-    return salvar_local(chave, texto.encode("utf-8"), raiz)
+    armazem.salvar(chave, texto.encode("utf-8"))

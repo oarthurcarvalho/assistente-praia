@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 
 import httpx
 
-from coletor.armazenamento import chave_bruto, ler_estado, salvar_estado, salvar_local
+from coletor.armazenamento import Local, chave_bruto, ler_estado, salvar_estado
 from coletor.execucao import CHAVE_HASHES, mudou, sha256_texto
 from coletor.rede import baixar, criar_cliente
 
@@ -68,7 +68,7 @@ def guardar_se_mudou(
     extensao: str,
     hashes: dict[str, str],
     agora: datetime,
-    salvar=salvar_local,
+    salvar,
 ) -> dict:
     """Grava o bruto inteiro (gz) se o texto mudou; atualiza o hash só depois de gravar."""
     resultado = {"fonte": fonte, "bytes": len(conteudo), "sha256": sha256_texto(texto_hash)}
@@ -80,42 +80,48 @@ def guardar_se_mudou(
     return {**resultado, "status": "ok", "chave": chave}
 
 
-def buscar_omm(cliente: httpx.Client, hashes: dict, agora: datetime) -> list[dict]:
+def buscar_omm(cliente: httpx.Client, hashes: dict, agora: datetime, salvar) -> list[dict]:
     links = links_boletins(baixar(PAGINA_OMM, cliente).text)
     resultados = []
     for codigo, url in links.items():
         resposta = baixar(url, cliente)
         texto = normalizar_boletim(resposta.text)
         fonte = BOLETINS_OMM[codigo]
-        resultados.append(guardar_se_mudou(fonte, resposta.content, texto, "txt.gz", hashes, agora))
+        resultados.append(
+            guardar_se_mudou(fonte, resposta.content, texto, "txt.gz", hashes, agora, salvar)
+        )
     return resultados
 
 
-def buscar_chm(cliente: httpx.Client, hashes: dict, agora: datetime) -> list[dict]:
+def buscar_chm(cliente: httpx.Client, hashes: dict, agora: datetime, salvar) -> list[dict]:
     resposta = baixar(PAGINA_CHM, cliente)
     texto = texto_avisos_chm(resposta.text)
-    return [guardar_se_mudou("avisos_chm", resposta.content, texto, "html.gz", hashes, agora)]
+    resultado = guardar_se_mudou(
+        "avisos_chm", resposta.content, texto, "html.gz", hashes, agora, salvar
+    )
+    return [resultado]
 
 
 def buscar_avisos(
-    cliente: httpx.Client, hashes: dict, agora: datetime, incluir_chm: bool = True
+    cliente: httpx.Client, hashes: dict, agora: datetime, salvar, incluir_chm: bool = True
 ) -> list[dict]:
     """OMM sempre; CHM quando pedido (2×/dia). Uma fonte que falha não derruba a outra."""
     etapas = [("omm", buscar_omm)] + ([("chm", buscar_chm)] if incluir_chm else [])
     resultados = []
     for nome, buscar in etapas:
         try:
-            resultados.extend(buscar(cliente, hashes, agora))
+            resultados.extend(buscar(cliente, hashes, agora, salvar))
         except (httpx.HTTPError, ValueError) as erro:  # 403 do CHM, layout mudou...
             resultados.append({"fonte": nome, "status": "falha", "erro": repr(erro)[:300]})
     return resultados
 
 
 def main() -> None:
-    hashes = ler_estado(CHAVE_HASHES)
+    armazem = Local()  # ensaio em dados/; a coleta de verdade é o coletor.rodar
+    hashes = ler_estado(armazem, CHAVE_HASHES)
     with criar_cliente() as cliente:
-        resultados = buscar_avisos(cliente, hashes, datetime.now(UTC))
-    salvar_estado(CHAVE_HASHES, hashes)
+        resultados = buscar_avisos(cliente, hashes, datetime.now(UTC), armazem.salvar)
+    salvar_estado(armazem, CHAVE_HASHES, hashes)
     for r in resultados:
         detalhe = r.get("chave") or r.get("erro") or ""
         print(f"{r['fonte']:12} {r['status']:12} {r.get('bytes', 0):>9} B  {detalhe}")

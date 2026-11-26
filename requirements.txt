@@ -1,7 +1,15 @@
 anyio==4.16.0
+boto3==1.44.12
+botocore==1.44.12
 certifi==2026.10.23
 h11==0.16.0
 httpcore==1.0.9
 httpx==0.28.1
 idna==3.20
+jmespath==1.1.0
+python-dateutil==2.9.0.post0
+python-dotenv==1.2.4
+s3transfer==0.19.3
+six==1.17.0
 typing_extensions==4.16.0
+urllib3==2.8.0

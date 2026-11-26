@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from coletor import openmeteo
-from coletor.armazenamento import chave_bruto, json_gz, salvar_local
+from coletor.armazenamento import Local, chave_bruto, json_gz
 from coletor.praias import carregar_praias
 
 AGORA = datetime(2026, 11, 28, 3, 17, 4, tzinfo=UTC)
@@ -94,6 +94,6 @@ def test_chave_e_gravacao_do_bruto(tmp_path):
     chave = chave_bruto("openmeteo_mar", AGORA)
     assert chave == "raw/openmeteo_mar/dt=2026-11-28/031704.json.gz"
 
-    caminho = salvar_local(chave, json_gz({"a": "ação"}), raiz=tmp_path)
-    with gzip.open(caminho, "rt", encoding="utf-8") as arquivo:
+    Local(tmp_path).salvar(chave, json_gz({"a": "ação"}))
+    with gzip.open(tmp_path / chave, "rt", encoding="utf-8") as arquivo:
         assert json.load(arquivo) == {"a": "ação"}

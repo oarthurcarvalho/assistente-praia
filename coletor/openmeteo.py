@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 
 import httpx
 
-from coletor.armazenamento import chave_bruto, json_gz, salvar_local
+from coletor.armazenamento import Local, chave_bruto, json_gz
 from coletor.praias import carregar_praias
 from coletor.rede import baixar, criar_cliente
 
@@ -117,13 +117,15 @@ def ultima_hora(resposta: list[dict], serie: str) -> str | None:
 
 
 def main() -> None:
+    armazem = Local()  # ensaio em dados/; a coleta de verdade é o coletor.rodar
     praias = carregar_praias()
     with criar_cliente() as cliente:
         for tipo in TIPOS:
             agora = datetime.now(UTC)
             envelope = buscar_openmeteo(tipo, praias, cliente, agora)
             conteudo = json_gz(envelope)
-            caminho = salvar_local(chave_bruto(envelope["fonte"], agora), conteudo)
+            caminho = chave_bruto(envelope["fonte"], agora)
+            armazem.salvar(caminho, conteudo)
             resposta = envelope["resposta"]
             linha = f"{tipo:12} {len(conteudo) / 1024:5.1f} KB  células {len(celulas(resposta))}"
             if tipo == "mar":

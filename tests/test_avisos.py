@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from coletor import avisos
-from coletor.armazenamento import ler_estado, salvar_estado
+from coletor.armazenamento import Local, ler_estado, salvar_estado
 from coletor.execucao import mudou, sha256_texto
 
 AGORA = datetime(2026, 11, 26, 9, 23, 5, tzinfo=UTC)
@@ -93,7 +93,7 @@ def test_403_no_chm_nao_derruba_a_omm(monkeypatch):
     monkeypatch.setattr(  # sem gravar nada: o teste é só sobre o isolamento das fontes
         avisos,
         "guardar_se_mudou",
-        lambda fonte, conteudo, texto, ext, hashes, agora: {"fonte": fonte, "status": "ok"},
+        lambda fonte, conteudo, texto, ext, hashes, agora, salvar: {"fonte": fonte, "status": "ok"},
     )
 
     def tratador(request):
@@ -104,7 +104,7 @@ def test_403_no_chm_nao_derruba_a_omm(monkeypatch):
         return httpx.Response(200, text=PAGINA_OMM)
 
     cliente = httpx.Client(transport=httpx.MockTransport(tratador))
-    resultados = avisos.buscar_avisos(cliente, {}, AGORA)
+    resultados = avisos.buscar_avisos(cliente, {}, AGORA, salvar=None)
 
     por_fonte = {r["fonte"]: r["status"] for r in resultados}
     assert por_fonte == {"boletim_omm": "ok", "avisos_omm": "ok", "chm": "falha"}
@@ -112,6 +112,7 @@ def test_403_no_chm_nao_derruba_a_omm(monkeypatch):
 
 
 def test_estado_vai_e_volta(tmp_path):
-    assert ler_estado("estado/hashes.json", raiz=tmp_path) == {}
-    salvar_estado("estado/hashes.json", {"avisos_omm": "abc"}, raiz=tmp_path)
-    assert ler_estado("estado/hashes.json", raiz=tmp_path) == {"avisos_omm": "abc"}
+    armazem = Local(tmp_path)
+    assert ler_estado(armazem, "estado/hashes.json") == {}
+    salvar_estado(armazem, "estado/hashes.json", {"avisos_omm": "abc"})
+    assert ler_estado(armazem, "estado/hashes.json") == {"avisos_omm": "abc"}
