@@ -74,7 +74,9 @@ def test_primeira_grava_segunda_registra_sem_mudanca(tmp_path):
     assert primeira["status"] == "ok"
     assert primeira["chave"] == "raw/avisos_omm/dt=2026-11-26/092305.txt.gz"
     assert gzip.decompress(gravados[primeira["chave"]]) == BOLETIM.encode()
+    assert primeira["bytes"] == len(gravados[primeira["chave"]])  # o gravado, não o baixado
     assert segunda["status"] == "sem_mudanca" and segunda["chave"] is None
+    assert segunda["bytes"] == 0
     assert len(gravados) == 1
 
 

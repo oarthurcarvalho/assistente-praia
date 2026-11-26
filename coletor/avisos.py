@@ -70,14 +70,18 @@ def guardar_se_mudou(
     agora: datetime,
     salvar,
 ) -> dict:
-    """Grava o bruto inteiro (gz) se o texto mudou; atualiza o hash só depois de gravar."""
-    resultado = {"fonte": fonte, "bytes": len(conteudo), "sha256": sha256_texto(texto_hash)}
+    """Grava o bruto inteiro (gz) se o texto mudou; atualiza o hash só depois de gravar.
+
+    "bytes" é o que foi gravado (como nas outras fontes): 0 quando não houve mudança.
+    """
+    resultado = {"fonte": fonte, "sha256": sha256_texto(texto_hash)}
     if not mudou(fonte, texto_hash, hashes):
-        return {**resultado, "status": "sem_mudanca", "chave": None}
+        return {**resultado, "status": "sem_mudanca", "bytes": 0, "chave": None}
     chave = chave_bruto(fonte, agora, extensao)
-    salvar(chave, gzip.compress(conteudo))
+    comprimido = gzip.compress(conteudo)
+    salvar(chave, comprimido)
     hashes[fonte] = resultado["sha256"]
-    return {**resultado, "status": "ok", "chave": chave}
+    return {**resultado, "status": "ok", "bytes": len(comprimido), "chave": chave}
 
 
 def buscar_omm(cliente: httpx.Client, hashes: dict, agora: datetime, salvar) -> list[dict]:
