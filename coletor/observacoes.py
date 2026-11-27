@@ -12,8 +12,8 @@ import httpx
 from coletor.armazenamento import Local, chave_bruto, json_gz
 from coletor.rede import baixar, criar_cliente
 
-# 24 h + 2 de sobra: a coleta diária que atrasar (ou a de ontem que falhou por
-# pouco) não deixa buraco. As horas repetidas entre dias somem no parse.
+# Janela padrão: 24 h + 2 de sobra. O coletor.rodar aumenta se a última coleta boa
+# for mais antiga. As horas repetidas entre dias somem no parse.
 JANELA = timedelta(hours=26)
 
 BOIA_URL = "https://simcosta.furg.br/api/intrans_data"
@@ -31,36 +31,36 @@ IOC_URL = "https://www.ioc-sealevelmonitoring.org/service.php"
 IOC_ESTACAO = "dhnn"  # Niterói: nível do mar a cada minuto (~1.500 leituras em 26 h)
 
 
-def _envelope(fonte: str, resposta: httpx.Response, agora: datetime) -> dict:
+def _envelope(fonte: str, resposta: httpx.Response, agora: datetime, janela: timedelta) -> dict:
     return {
         "fonte": fonte,
         "coletado_em": agora.isoformat(),
         "url": str(resposta.url),
-        "janela_h": JANELA.total_seconds() / 3600,
+        "janela_h": round(janela.total_seconds() / 3600, 2),
         "resposta": resposta.json(),
     }
 
 
-def buscar_boia(cliente: httpx.Client, agora: datetime) -> dict:
+def buscar_boia(cliente: httpx.Client, agora: datetime, janela: timedelta = JANELA) -> dict:
     params = {
         "boiaID": BOIA_ID,
         "type": "json",
-        "time1": int((agora - JANELA).timestamp()),  # epoch em segundos
+        "time1": int((agora - janela).timestamp()),  # epoch em segundos
         "time2": int(agora.timestamp()),
         "params": ",".join(PARAMS_BOIA),
     }
-    return _envelope("boia_rj4", baixar(BOIA_URL, cliente, params=params), agora)
+    return _envelope("boia_rj4", baixar(BOIA_URL, cliente, params=params), agora, janela)
 
 
-def buscar_ioc(cliente: httpx.Client, agora: datetime) -> dict:
+def buscar_ioc(cliente: httpx.Client, agora: datetime, janela: timedelta = JANELA) -> dict:
     params = {
         "query": "data",
         "code": IOC_ESTACAO,
-        "timestart": f"{agora - JANELA:%Y-%m-%dT%H:%M}",  # UTC
+        "timestart": f"{agora - janela:%Y-%m-%dT%H:%M}",  # UTC
         "timestop": f"{agora:%Y-%m-%dT%H:%M}",
         "format": "json",
     }
-    return _envelope("ioc_niteroi", baixar(IOC_URL, cliente, params=params), agora)
+    return _envelope("ioc_niteroi", baixar(IOC_URL, cliente, params=params), agora, janela)
 
 
 def main() -> None:

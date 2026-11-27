@@ -44,19 +44,43 @@ def relogio_fixo(inicio=AGORA):
     return lambda: inicio + timedelta(seconds=next(passos))
 
 
+def em(texto: str) -> datetime:
+    return datetime.fromisoformat(f"2026-11-{texto}:00+00:00")
+
+
 @pytest.mark.parametrize(
-    ("hora", "bloco"), [("00:23", 0), ("09:23", 9), ("11:40", 9), ("12:05", 12), ("23:59", 21)]
-)
-def test_bloco_do_cron_tolera_atraso(hora, bloco):
-    h, m = map(int, hora.split(":"))
-    assert rodar.bloco_do_horario(AGORA.replace(hour=h, minute=m)) == bloco
+    ("agora", "prazo"),
+    [("27T09:00", "27T09:00"), ("27T11:40", "27T09:00"), ("27T08:59", "26T21:00"),
+     ("27T23:59", "27T21:00"), ("27T00:23", "26T21:00")],
+)  # fmt: skip
+def test_ultimo_prazo_que_ja_passou(agora, prazo):
+    assert rodar.ultimo_prazo(em(agora), (9, 21)) == em(prazo)
 
 
-def test_o_que_coletar_por_horario():
-    assert rodar.o_que_coletar(AGORA.replace(hour=9)) == {"chm": True, "diarias": True}
-    assert rodar.o_que_coletar(AGORA.replace(hour=21)) == {"chm": True, "diarias": False}
-    assert rodar.o_que_coletar(AGORA.replace(hour=3)) == {"chm": False, "diarias": False}
-    assert rodar.o_que_coletar(AGORA.replace(hour=3), todas=True) == {"chm": True, "diarias": True}
+def test_diarias_vencem_uma_vez_por_dia_seja_qual_for_a_execucao():
+    ontem = {f: em("26T09:30").isoformat() for f in rodar.PRAZOS}
+    ontem["avisos_chm"] = em("26T21:30").isoformat()  # o CHM também rodou às 21h
+    # a das 06:23 que atrasou até 08:48: nada vence ainda (o caso de 27/11)
+    assert rodar.vencidas(em("27T08:48"), ontem) == set()
+    # a das 09:23 foi descartada pelo GitHub: a das 12:23 pega o dia mesmo assim
+    assert rodar.vencidas(em("27T12:23"), ontem) == {"avisos_chm", "boia_rj4", "ioc_niteroi"}
+    hoje = {f: em("27T12:23").isoformat() for f in rodar.PRAZOS}
+    assert rodar.vencidas(em("27T15:23"), hoje) == set()  # já coletado hoje
+    assert rodar.vencidas(em("27T21:23"), hoje) == {"avisos_chm"}  # o CHM vence de novo
+
+
+def test_sem_historico_tudo_vence_e_todas_forca():
+    assert rodar.vencidas(em("27T03:23"), {}) == set(rodar.PRAZOS)
+    agora = {f: em("27T03:00").isoformat() for f in rodar.PRAZOS}
+    assert rodar.vencidas(em("27T03:23"), agora, todas=True) == set(rodar.PRAZOS)
+
+
+def test_janela_cobre_desde_a_ultima_coleta_boa():
+    assert rodar.janela(em("27T09:23"), None) == timedelta(hours=26)
+    assert rodar.janela(em("27T09:23"), em("26T09:23").isoformat()) == timedelta(hours=26)
+    tres_dias = rodar.janela(em("27T09:23"), em("24T09:23").isoformat())
+    assert tres_dias == timedelta(days=3, hours=2)  # a boia falhou 3 dias: busca os 3
+    assert rodar.janela(em("27T09:23"), em("01T09:23").isoformat()) == timedelta(days=7)
 
 
 def test_execucao_completa_grava_bruto_estado_e_log(tmp_path):
@@ -91,13 +115,28 @@ def test_fonte_que_falha_nao_derruba_as_outras(tmp_path):
     assert json.loads(armazem.ler(chave_log))["contagem"] == {"ok": 7, "falha": 1}
 
 
-def test_fora_das_09h_nao_busca_diarias_nem_chm(tmp_path):
+def test_o_que_ja_foi_coletado_hoje_nao_repete(tmp_path):
+    armazem = Local(tmp_path)
+    rodar.rodar(fontes_falsas(), armazem, relogio=relogio_fixo())  # 09:23: tudo
     resultados, _ = rodar.rodar(
-        fontes_falsas(), Local(tmp_path), relogio=relogio_fixo(AGORA.replace(hour=15))
+        fontes_falsas(), armazem, relogio=relogio_fixo(AGORA.replace(hour=15))
     )
     fontes = {r["fonte"] for r in resultados}
     assert "boia_rj4" not in fontes and "avisos_chm" not in fontes
     assert "avisos_omm" in fontes
+
+
+def test_fonte_que_falhou_tenta_de_novo_na_proxima(tmp_path):
+    armazem = Local(tmp_path)
+    rodar.rodar(fontes_falsas(falhar="simcosta.furg.br"), armazem, relogio=relogio_fixo())
+    ultimas = ler_estado(armazem, rodar.CHAVE_ULTIMAS)
+    assert "boia_rj4" not in ultimas and "ioc_niteroi" in ultimas
+
+    resultados, _ = rodar.rodar(
+        fontes_falsas(), armazem, relogio=relogio_fixo(AGORA.replace(hour=12))
+    )
+    fontes = {r["fonte"]: r["status"] for r in resultados}
+    assert fontes["boia_rj4"] == "ok" and "ioc_niteroi" not in fontes
 
 
 def test_segunda_execucao_le_o_estado_da_primeira(tmp_path):
@@ -152,6 +191,7 @@ def test_observacoes_pedem_janela_de_26_horas():
 
     cliente = httpx.Client(transport=httpx.MockTransport(tratador))
     boia, ioc = buscar_boia(cliente, AGORA), buscar_ioc(cliente, AGORA)
+    buscar_boia(cliente, AGORA, timedelta(days=3))
 
     p = pedidos[0].params
     assert int(p["time2"]) - int(p["time1"]) == 26 * 3600
@@ -159,6 +199,7 @@ def test_observacoes_pedem_janela_de_26_horas():
     assert pedidos[1].params["timestart"] == f"{AGORA - JANELA:%Y-%m-%dT%H:%M}"
     assert boia["fonte"] == "boia_rj4" and ioc["fonte"] == "ioc_niteroi"
     assert boia["resposta"] == []  # resposta inteira, mesmo vazia: o parse da semana 3 decide
+    assert int(pedidos[2].params["time2"]) - int(pedidos[2].params["time1"]) == 3 * 86400
 
 
 def test_tabela_do_step_summary_mostra_a_falha():

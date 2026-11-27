@@ -1,18 +1,19 @@
 """Uma execução completa do coletor: cada fonte no seu try, 1 log, saída ≠ 0 se algo falhou.
 
-    python -m coletor.rodar             # o horário (UTC) decide o que coletar; grava no R2
+    python -m coletor.rodar             # coleta o que está vencido; grava no R2
     python -m coletor.rodar --todas     # tudo agora (workflow_dispatch e teste manual)
     python -m coletor.rodar --local     # grava em dados/ em vez do R2
 
-A cada 3 h: Open-Meteo (4) e boletins da OMM. Às 09h e 21h UTC: página do CHM.
-Às 09h UTC (06h no Rio): boia e marégrafo, com janela de 26 h.
+Toda execução: Open-Meteo (4) e boletins da OMM. Página do CHM: vence às 09h e 21h UTC.
+Boia e marégrafo: vencem às 09h UTC (06h no Rio). Fonte vencida que falha continua
+vencida, e a execução seguinte tenta de novo.
 """
 
 import argparse
 import os
 import sys
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from dotenv import load_dotenv
@@ -27,34 +28,57 @@ from coletor.armazenamento import (
 )
 from coletor.avisos import buscar_avisos
 from coletor.execucao import CHAVE_HASHES, registrar_execucao
-from coletor.observacoes import buscar_boia, buscar_ioc
+from coletor.observacoes import JANELA, buscar_boia, buscar_ioc
 from coletor.openmeteo import TIPOS, buscar_openmeteo
 from coletor.praias import carregar_praias
 from coletor.rede import criar_cliente
 
-BLOCOS_CHM = {9, 21}
-BLOCO_DIARIAS = 9
+# Fonte que não vai em toda execução -> horários (UTC) em que ela vence.
+PRAZOS = {"avisos_chm": (9, 21), "boia_rj4": (9,), "ioc_niteroi": (9,)}
+CHAVE_ULTIMAS = "estado/ultimas_coletas.json"  # fonte -> início da última coleta que deu certo
+SOBRA = timedelta(hours=2)
+JANELA_MAXIMA = timedelta(days=7)
 
 
 def agora_utc() -> datetime:
     return datetime.now(UTC)
 
 
-def bloco_do_horario(agora: datetime) -> int:
-    """A que execução do cron (00, 03, ..., 21 UTC) este horário pertence.
+def ultimo_prazo(agora: datetime, horas: tuple[int, ...]) -> datetime:
+    """O horário marcado mais recente que já passou: hoje ou ontem."""
+    marcas = [
+        (agora - timedelta(days=dias)).replace(hour=h, minute=0, second=0, microsecond=0)
+        for dias in (0, 1)
+        for h in horas
+    ]
+    return max(m for m in marcas if m <= agora)
 
-    O cron "23 */3" atrasa: a das 09:23 que só começar às 11:40 ainda é do bloco 9 e
-    ainda coleta as diárias. Pelo relógio exato (hour == 9) ela perderia o dia.
+
+def vencidas(agora: datetime, ultimas: dict[str, str], todas: bool = False) -> set[str]:
+    """Fontes cujo prazo passou desde a última coleta que deu certo.
+
+    Não depende de qual execução do cron é esta: o GitHub atrasa horas e às vezes
+    descarta execuções. A primeira que rodar depois das 09h UTC coleta a boia, seja
+    a das 09:23, a das 12:23 ou uma atrasada da madrugada.
     """
-    return agora.hour // 3 * 3
-
-
-def o_que_coletar(agora: datetime, todas: bool = False) -> dict[str, bool]:
-    bloco = bloco_do_horario(agora)
     return {
-        "chm": todas or bloco in BLOCOS_CHM,
-        "diarias": todas or bloco == BLOCO_DIARIAS,
+        fonte
+        for fonte, horas in PRAZOS.items()
+        if todas
+        or fonte not in ultimas
+        or datetime.fromisoformat(ultimas[fonte]) < ultimo_prazo(agora, horas)
     }
+
+
+def janela(agora: datetime, ultima: str | None) -> timedelta:
+    """Desde a última coleta boa (com 2 h de sobra), nunca menos que 26 h nem mais que 7 dias.
+
+    Se a boia falhar 3 dias seguidos, a coleta que voltar busca os 3 dias: sem buraco.
+    """
+    if ultima is None:
+        return JANELA
+    desde = agora - datetime.fromisoformat(ultima) + SOBRA
+    return min(max(desde, JANELA), JANELA_MAXIMA)
 
 
 def guardar_envelope(envelope: dict, agora: datetime, salvar) -> dict:
@@ -90,10 +114,11 @@ def tentar(fonte: str, etapa) -> list[dict]:
 
 
 def rodar(cliente: httpx.Client, armazem, todas: bool = False, relogio=agora_utc):
-    """Coleta o que é deste horário e grava bruto, estado e log. Devolve (resultados, log)."""
+    """Coleta o que está vencido e grava bruto, estado e log. Devolve (resultados, log)."""
     inicio = relogio()
-    plano = o_que_coletar(inicio, todas)
     hashes = ler_estado(armazem, CHAVE_HASHES)  # sem estado (R2 fora) não vale continuar
+    ultimas = ler_estado(armazem, CHAVE_ULTIMAS)
+    pendentes = vencidas(inicio, ultimas, todas)
     praias = carregar_praias()
 
     def openmeteo(tipo):
@@ -101,24 +126,33 @@ def rodar(cliente: httpx.Client, armazem, todas: bool = False, relogio=agora_utc
         envelope = buscar_openmeteo(tipo, praias, cliente, agora)
         return guardar_envelope(envelope, agora, armazem.salvar)
 
-    def observacao(buscar):
+    def observacao(fonte, buscar):
         agora = relogio()
-        return guardar_envelope(buscar(cliente, agora), agora, armazem.salvar)
+        envelope = buscar(cliente, agora, janela(agora, ultimas.get(fonte)))
+        return guardar_envelope(envelope, agora, armazem.salvar)
 
     resultados = []
     for tipo in TIPOS:
         resultados += tentar(f"openmeteo_{tipo}", lambda tipo=tipo: openmeteo(tipo))
     resultados += tentar(
         "avisos",
-        lambda: buscar_avisos(cliente, hashes, relogio(), armazem.salvar, incluir_chm=plano["chm"]),
+        lambda: buscar_avisos(
+            cliente, hashes, relogio(), armazem.salvar, incluir_chm="avisos_chm" in pendentes
+        ),
     )
-    if plano["diarias"]:
-        resultados += tentar("boia_rj4", lambda: observacao(buscar_boia))
-        resultados += tentar("ioc_niteroi", lambda: observacao(buscar_ioc))
+    for fonte, buscar in (("boia_rj4", buscar_boia), ("ioc_niteroi", buscar_ioc)):
+        if fonte in pendentes:
+            resultados += tentar(fonte, lambda f=fonte, b=buscar: observacao(f, b))
+
+    # Só a fonte que deu certo sai da fila; a que falhou fica vencida para a próxima.
+    for r in resultados:
+        if r["fonte"] in PRAZOS and r["status"] in ("ok", "sem_mudanca"):
+            ultimas[r["fonte"]] = inicio.isoformat()
 
     # Estado só no fim, depois de todo bruto gravado (mesma regra do hash na quinta).
     try:
         salvar_estado(armazem, CHAVE_HASHES, hashes)
+        salvar_estado(armazem, CHAVE_ULTIMAS, ultimas)
     except Exception as erro:
         resultados.append({"fonte": "estado", "status": "falha", "erro": repr(erro)[:300]})
     chave_log = registrar_execucao(resultados, inicio, relogio(), armazem.salvar)
@@ -142,7 +176,7 @@ def tabela_markdown(resultados: list[dict], chave_log: str) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m coletor.rodar")
-    parser.add_argument("--todas", action="store_true", help="coleta tudo, ignora o horário")
+    parser.add_argument("--todas", action="store_true", help="coleta tudo, vencido ou não")
     parser.add_argument("--local", action="store_true", help="grava em dados/ e não no R2")
     args = parser.parse_args(argv)
 
